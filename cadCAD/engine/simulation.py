@@ -1,6 +1,7 @@
 from typing import Any, Callable, Dict, List, Tuple
 from functools import reduce
 from funcy import curry
+from funcy.flow import post_processing
 
 from cadCAD.utils import flatten
 from cadCAD.engine.utils import engine_exception
@@ -217,7 +218,8 @@ class Executor:
         subset_window,
         configured_N,
         # remote_ind
-        additional_objs=None
+        additional_objs=None,
+        post_processing: callable=None
     ):
         run += 1
 
@@ -250,4 +252,4 @@ class Executor:
             [execute_run(sweep_dict, states_list, configs, env_processes, time_seq, run)]
         )
 
-        return pipe_run
+        return post_processing(pipe_run)

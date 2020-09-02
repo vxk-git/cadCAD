@@ -1,5 +1,7 @@
+from operator import pos
 from time import time
 from typing import Callable, Dict, List, Any, Tuple
+from funcy.flow import post_processing
 from tqdm.auto import tqdm
 
 from cadCAD.utils import flatten
@@ -58,17 +60,19 @@ class ExecutionContext:
 
 class Executor:
     def __init__(self,
-             exec_context: ExecutionContext, configs: List[Configuration], spark_context=None
-    ) -> None:
+                 exec_context: ExecutionContext, configs: List[Configuration], spark_context=None
+                 ) -> None:
         self.sc = spark_context
         self.SimExecutor = SimExecutor
         self.exec_method = exec_context.method
         self.exec_context = exec_context.name
         self.configs = configs
 
-    def execute(self) -> Tuple[Any, Any, Dict[str, Any]]:
+    def execute(self,
+                post_processing: callable = None) -> Tuple[Any, Any, Dict[str, Any]]:
         config_proc = Processor()
-        create_tensor_field = TensorFieldReport(config_proc).create_tensor_field
+        create_tensor_field = TensorFieldReport(
+            config_proc).create_tensor_field
 
         sessions = []
         var_dict_list, states_lists = [], []
@@ -104,15 +108,24 @@ class Executor:
             var_dict_list.append(x.sim_config['M'])
             states_lists.append([x.initial_state])
             eps.append(list(x.exogenous_states.values()))
-            configs_structs.append(config_proc.generate_config(x.initial_state, x.partial_state_updates, eps[config_idx]))
+            configs_structs.append(config_proc.generate_config(
+                x.initial_state, x.partial_state_updates, eps[config_idx]))
             env_processes_list.append(x.env_processes)
             partial_state_updates.append(x.partial_state_updates)
-            sim_executors.append(SimExecutor(x.policy_ops).simulation)
+
+            sim_exec = SimExecutor(x.policy_ops).simulation
+            if post_processing is None:
+                def post_processing(x): return x
+            f = lambda *args, **kwargs: sim_exec(*args,
+                                                 **kwargs,
+                                                 post_processing=post_processing)
+            sim_executors.append(f)
 
             config_idx += 1
 
         def get_final_dist_results(simulations, psus, eps, sessions):
-            tensor_fields = [create_tensor_field(psu, ep) for psu, ep in list(zip(psus, eps))]
+            tensor_fields = [create_tensor_field(
+                psu, ep) for psu, ep in list(zip(psus, eps))]
             return simulations, tensor_fields, sessions
 
         def get_final_results(simulations, psus, eps, sessions, remote_threshold):
@@ -126,7 +139,7 @@ class Executor:
             flat_simulations = flatten(flat_timesteps)
             if config_amt == 1:
                 return simulations, tensor_fields, sessions
-            elif (config_amt > 1): # and (config_amt < remote_threshold):
+            elif (config_amt > 1):  # and (config_amt < remote_threshold):
                 return flat_simulations, tensor_fields, sessions
 
         remote_threshold = 100
@@ -136,7 +149,7 @@ class Executor:
             try:
                 if config_amt == 1:
                     return ExecutionMode.single_mode, single_proc_exec
-                elif (config_amt > 1): # and (config_amt < remote_threshold):
+                elif (config_amt > 1):  # and (config_amt < remote_threshold):
                     return ExecutionMode.multi_mode, parallelize_simulations
             except AttributeError:
                 if config_amt < 1:
@@ -150,21 +163,24 @@ class Executor:
         if self.exec_context != ExecutionMode.distributed:
             # Consider Legacy Support
             if self.exec_context != ExecutionMode.local_mode:
-                self.exec_context, self.exec_method = auto_mode_switcher(config_amt)
+                self.exec_context, self.exec_method = auto_mode_switcher(
+                    config_amt)
 
             print("Execution Method: " + self.exec_method.__name__)
             simulations_results = self.exec_method(
                 sim_executors, var_dict_list, states_lists, configs_structs, env_processes_list, Ts, SimIDs, RunIDs,
                 ExpIDs, SubsetIDs, SubsetWindows, original_N
             )
-            final_result = get_final_results(simulations_results, partial_state_updates, eps, sessions, remote_threshold)
+            final_result = get_final_results(
+                simulations_results, partial_state_updates, eps, sessions, remote_threshold)
         elif self.exec_context == ExecutionMode.distributed:
             print("Execution Method: " + self.exec_method.__name__)
             simulations_results = self.exec_method(
                 sim_executors, var_dict_list, states_lists, configs_structs, env_processes_list, Ts,
                 SimIDs, RunIDs, ExpIDs, SubsetIDs, SubsetWindows, original_N, self.sc
             )
-            final_result = get_final_dist_results(simulations_results, partial_state_updates, eps, sessions)
+            final_result = get_final_dist_results(
+                simulations_results, partial_state_updates, eps, sessions)
 
         t2 = time()
         print(f"Total execution time: {t2 - t1 :.2f}s")
